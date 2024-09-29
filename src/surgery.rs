@@ -8,16 +8,65 @@ use std::collections::VecDeque;
 // ##patients ordering is in increasing *distance* to due date, and then increasing surgery_duration
 fn prelim_day_assignment(instance: &Instance) -> Vec<Vec<VecDeque<usize>>> {
     // output: patient_day_per_surgeon
-    todo!();
+    let mut patients_per_day_per_surgeon: Vec<Vec<VecDeque<usize>>> = Vec::new();
+
+    // patient_indices is decreasing
+    let mut patient_indices: Vec<usize> = (0..instance.patients.len()).collect();
+    for surgeon_idx in 0..instance.surgeons.len() {
+        let surgeon_id = &instance.surgeons[surgeon_idx].id;
+        for j in (0..patient_indices.len()).rev() {
+            let patient_index = patient_indices[j];
+            if &instance.patients[patient_index].surgeon_id == surgeon_id {
+                patients_per_day_per_surgeon[surgeon_idx][instance.patients[patient_index].surgery_release_day].push_back(patient_index);
+                patient_indices.remove(j);
+            }
+        }
+    }
+    assert!(patient_indices.len() == 0, "patient_indices wasn't exhausted during initial assignment of days");
+
+    // Order each VecDeque<usize> in increasing *distance* to due date, and then increasing surgery_duration
+
+    for surgeon_idx in 0..instance.surgeons.len() {
+        for day in 0..instance.days {
+            sort_patients_in_slot(instance, &mut patients_per_day_per_surgeon[surgeon_idx][day])
+        }
+    }
+
+    patients_per_day_per_surgeon
 }
 
-fn arrange_patients_for_surgeon(surgeon_idx: usize, instance: &Instance, patients_per_day_per_surgeon: &mut Vec<Vec<VecDeque<usize>>>) -> Result<(), String> {
+fn sort_patients_in_slot(instance: &Instance, patient_indices: &mut VecDeque<usize>) {
+    if patient_indices.len() <= 1 {
+        return ();
+    }
+
+    let mut rhs: VecDeque<usize> = VecDeque::new();
+
+    let pivot = patient_indices.pop_front().unwrap();
+    let pivot_due_date = instance.patients[pivot].surgery_due_day;
+    let pivot_duration = instance.patients[pivot].surgery_duration;
+
+    for j in (0..patient_indices.len()).rev() {
+        if instance.patients[patient_indices[j]].surgery_due_day > pivot_due_date || 
+        ((instance.patients[patient_indices[j]].surgery_due_day == pivot_due_date) && 
+        (instance.patients[patient_indices[j]].surgery_duration > pivot_duration)) {
+            rhs.push_back(patient_indices.remove(j).unwrap());
+        }
+    }
+
+    sort_patients_in_slot(instance, patient_indices);
+    patient_indices.push_back(pivot);
+
+    sort_patients_in_slot(instance, &mut rhs);
+    patient_indices.append(&mut rhs);
+}
+
+fn arrange_patients_for_surgeon(instance: &Instance, patients_per_day_per_surgeon: &mut Vec<Vec<VecDeque<usize>>>, surgeon_idx: usize) -> Result<(), String> {
     let result = dynamic_arrange_patients_for_surgeon(&instance.surgeons[surgeon_idx].max_surgery_time, &mut patients_per_day_per_surgeon[surgeon_idx], 
         0, &instance.patients)?;
     Ok(result)
 }
 
-// ##### input should be surgeon idx, patient_day_per_surgeon, surgeon_capacity_vec, patients (or just instance for previous two), first_day
 fn dynamic_arrange_patients_for_surgeon(capacity: &Vec<u16>, assignment: &mut Vec<VecDeque<usize>>, first_day: usize, patients: &Vec<Patient>) 
     -> Result<(), String> {
     
@@ -89,6 +138,7 @@ fn dynamic_arrange_patients_for_surgeon(capacity: &Vec<u16>, assignment: &mut Ve
 
 fn bump_patient(patient_idx: usize) -> Result<(),()> {todo!();}
 
+//##### implement patient bumping of doesn't work
 fn patient_OT_assignment_for_day(instance: &Instance, patients_per_day_per_surgeon: &mut Vec<Vec<VecDeque<usize>>>, day: usize) -> Result<Vec<Vec<usize>>, String> {
     // outer Vec corresponds to OTs as ordered in instance.operating_theaters
 
@@ -108,7 +158,6 @@ fn patient_OT_assignment_for_day(instance: &Instance, patients_per_day_per_surge
     biggest_in_biggest_bin_pack(&mut items, &mut bins)
 }
 
-//##### change output to Result<Vec<VecDeque<usize>>, String>?
 fn biggest_in_biggest_bin_pack(items: &mut Vec<(usize, u16)>, bins: &mut Vec<(usize, u16)>) -> Result<Vec<Vec<usize>>, String> {
     let mut bin_assignment: Vec<Vec<usize>> = vec![vec![]; bins.len()];
 

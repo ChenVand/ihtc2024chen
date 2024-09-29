@@ -7,7 +7,7 @@ use serde_json;
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 // #[serde(rename_all = "snake_case")]
 pub struct Instance {
-    pub days: u32,
+    pub days: usize,
     // skill_levels: u8,
     // shift_types: Vec<String>,
     // age_groups
@@ -22,7 +22,7 @@ pub struct Instance {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct Patient {
-    id: String,
+    pub id: String,
     pub mandatory: bool,
     pub surgery_release_day: usize,
     #[serde(default = "default_due_day")]
@@ -37,7 +37,7 @@ fn default_due_day() -> usize {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct Surgeon {
-    id: String,
+    pub id: String,
     pub max_surgery_time: Vec<u16>,
 }
 
