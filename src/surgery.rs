@@ -1,5 +1,5 @@
-use crate::builder::Instance;
-use crate::builder::Patient;
+use crate::builder::{Instance, Patient};
+use crate::builder;
 use std::collections::VecDeque;
 // use std::iter::Iterator;
 
@@ -10,10 +10,15 @@ fn prelim_day_assignment(instance: &Instance) -> Vec<Vec<VecDeque<usize>>> {
     // output: patient_day_per_surgeon
     let mut patients_per_day_per_surgeon: Vec<Vec<VecDeque<usize>>> = Vec::new();
 
-    // patient_indices is decreasing
     let mut patient_indices: Vec<usize> = (0..instance.patients.len()).collect();
+    
     for surgeon_idx in 0..instance.surgeons.len() {
         let surgeon_id = &instance.surgeons[surgeon_idx].id;
+
+        // add row corresponding to surgeon
+        patients_per_day_per_surgeon.push(vec![VecDeque::new(); instance.days]);
+
+        //going through patient_indices in decreasing order
         for j in (0..patient_indices.len()).rev() {
             let patient_index = patient_indices[j];
             if &instance.patients[patient_index].surgeon_id == surgeon_id {
@@ -47,9 +52,9 @@ fn sort_patients_in_slot(instance: &Instance, patient_indices: &mut VecDeque<usi
     let pivot_duration = instance.patients[pivot].surgery_duration;
 
     for j in (0..patient_indices.len()).rev() {
-        if instance.patients[patient_indices[j]].surgery_due_day > pivot_due_date || 
-        ((instance.patients[patient_indices[j]].surgery_due_day == pivot_due_date) && 
-        (instance.patients[patient_indices[j]].surgery_duration > pivot_duration)) {
+        let curr_patient = &instance.patients[patient_indices[j]];
+        if curr_patient.surgery_due_day > pivot_due_date || 
+        ((curr_patient.surgery_due_day == pivot_due_date) && (curr_patient.surgery_duration > pivot_duration)) {
             rhs.push_back(patient_indices.remove(j).unwrap());
         }
     }
@@ -61,33 +66,68 @@ fn sort_patients_in_slot(instance: &Instance, patient_indices: &mut VecDeque<usi
     patient_indices.append(&mut rhs);
 }
 
-fn arrange_patients_for_surgeon(instance: &Instance, patients_per_day_per_surgeon: &mut Vec<Vec<VecDeque<usize>>>, surgeon_idx: usize) -> Result<(), String> {
-    let result = dynamic_arrange_patients_for_surgeon(&instance.surgeons[surgeon_idx].max_surgery_time, &mut patients_per_day_per_surgeon[surgeon_idx], 
-        0, &instance.patients)?;
-    Ok(result)
+//To be parallelized
+fn arrange_patients_for_surgeons(instance: &Instance, patients_per_day_per_surgeon: &mut Vec<Vec<VecDeque<usize>>>, surgeon_spec: Option<&[usize]>) -> Result<Vec<VecDeque<usize>>, String> {
+    let num_surgeons = instance.surgeons.len();
+    let mut unassigned_patients: Vec<VecDeque<usize>> = vec![VecDeque::new(); num_surgeons];
+    
+    match surgeon_spec {
+        Some(surgeon_slice) => {
+            for surgeon_idx in surgeon_slice {
+                let result = dynamic_arrange_patients_for_surgeon(&instance.surgeons[*surgeon_idx].max_surgery_time, &mut patients_per_day_per_surgeon[*surgeon_idx], 
+                    0, &instance.patients)?;
+                unassigned_patients[*surgeon_idx] = result;
+            }
+        },
+        None => {
+            for surgeon_idx in 0..num_surgeons {
+                #[cfg(test)]
+                println!("I am in a test for surgeon {}", surgeon_idx);
+
+                let result = dynamic_arrange_patients_for_surgeon(&instance.surgeons[surgeon_idx].max_surgery_time, &mut patients_per_day_per_surgeon[surgeon_idx], 
+                    0, &instance.patients)?;
+                unassigned_patients[surgeon_idx] = result;
+            }
+        },
+    }
+    Ok(unassigned_patients)
 }
 
+
+//##### Serious problemo, either here or in test
 fn dynamic_arrange_patients_for_surgeon(capacity: &Vec<u16>, assignment: &mut Vec<VecDeque<usize>>, first_day: usize, patients: &Vec<Patient>) 
-    -> Result<(), String> {
-    
+    -> Result<VecDeque<usize>, String> {
+
     assert!(first_day < capacity.len());
 
-    for day in first_day..(capacity.len()-1) {
+    for day in first_day..capacity.len() {
+        #[cfg(test)]
+        println!("Entering day {}", day);
         /*
         for start point:
             while duration exceeds capacity, successively accumulate patients to bump.
             bump these patients and apply function recursively
             if this did not succeed, undo bump and continue to next iteration. 
         */
+
+        // loop over different attempts (corresponding to different values of start_p) to successfully bump patients out of day
         let mut start_p: usize = assignment[day].len();
         loop {
-            let mut demanded_duration = Iterator::sum::<u16>(assignment[day].iter().map(|x| patients[*x].surgery_duration));
+            let mut demanded_duration = Iterator::sum::<u16>(assignment[day].iter().map(|x| patients[*x].surgery_duration));          
+            // check if any patients even need bumping. Done inside loop because should be refreshed for every start_p
+            #[cfg(test)]
+            println!("for start_p = {}, Demanded duration is {}, capacity is {}", start_p, demanded_duration, capacity[day]);
+
+            if demanded_duration <=  capacity[day] {break;}
             let mut patients_to_bump: VecDeque<usize> = VecDeque::new();
 
             // collect patients to be bumped
-            'inner: for patient_counter in (start_p-1)..=0 {
-            // while demanded_duration > capacity[day] {
+            'inner: for patient_counter in (0..(start_p-1)).rev() {
+                #[cfg(test)]
+                println!("patient_counter = {}", patient_counter);
                 if demanded_duration > capacity[day] {
+                    #[cfg(test)]
+                    println!("demanded_duration = {} is still too high", demanded_duration);
                     if patients[assignment[day][patient_counter]].surgery_due_day > day {
                         // note patients_to_bump is decreasing
                         patients_to_bump.push_back(patient_counter);
@@ -100,7 +140,19 @@ fn dynamic_arrange_patients_for_surgeon(capacity: &Vec<u16>, assignment: &mut Ve
 
             // if all patients that could, have been moved and still capacity is not satisfied, then abort.
             if demanded_duration > capacity[day] {
-                return Err("Capacity in day {day:?} cannot be reached".into());
+                return Err(String::from(format!("Capacity in day {:?} cannot be reached", day)));
+            }
+
+
+            // bump patients into the abyss if the last day
+            //###### perhaps modify to keep a list of patients not assigned a day
+            if day == capacity.len()-1 {
+                let mut unassigned_patients = VecDeque::new();
+
+                for patient_local_idx in patients_to_bump.clone() {
+                    unassigned_patients.push_back(assignment[day].remove(patient_local_idx).unwrap());
+                }
+                return Ok(unassigned_patients);
             }
 
             // bump patients (bumped_patient is actually patient index in instance.patients)
@@ -114,7 +166,7 @@ fn dynamic_arrange_patients_for_surgeon(capacity: &Vec<u16>, assignment: &mut Ve
             let result = dynamic_arrange_patients_for_surgeon(capacity, assignment, day + 1, patients);
             if result.is_ok() {
                 // note that this means that the outermost day loop stops, and so it only goes up to a problematic day.
-                return Ok(());
+                return result;
             } else {
                 // patient_local_idx increases
                 for patient_local_idx in patients_to_bump.into_iter().rev() {
@@ -132,10 +184,12 @@ fn dynamic_arrange_patients_for_surgeon(capacity: &Vec<u16>, assignment: &mut Ve
         }
 
     }
-    return Ok(());  
+    //If this was reached, then all days were valid and no-one needed bumping
+    return Ok(VecDeque::new());  
         
 }
 
+//#####
 fn bump_patient(patient_idx: usize) -> Result<(),()> {todo!();}
 
 //##### implement patient bumping of doesn't work
@@ -158,6 +212,7 @@ fn patient_OT_assignment_for_day(instance: &Instance, patients_per_day_per_surge
     biggest_in_biggest_bin_pack(&mut items, &mut bins)
 }
 
+//Will be attempted to be parallelized
 fn biggest_in_biggest_bin_pack(items: &mut Vec<(usize, u16)>, bins: &mut Vec<(usize, u16)>) -> Result<Vec<Vec<usize>>, String> {
     let mut bin_assignment: Vec<Vec<usize>> = vec![vec![]; bins.len()];
 
@@ -181,4 +236,89 @@ fn biggest_in_biggest_bin_pack(items: &mut Vec<(usize, u16)>, bins: &mut Vec<(us
         }
     }
     Ok(bin_assignment)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use itertools::Itertools;
+
+    #[test]
+    fn check_prelim_day_assignment() {
+        //load instance and pass to prelim_day_assignment
+        let result =
+        builder::instance_build(r#"C:\Users\chenv\ihtc2024chen\public_datasets\i01.json"#);
+
+        let Ok(instance) = result else {
+            panic!("{}", result.err().unwrap());
+        };
+
+        let patients_per_day_per_surgeon = prelim_day_assignment(&instance);
+        
+        //Check prelim_day_assignment
+        let num_days = patients_per_day_per_surgeon[0].len();
+        for surgeon_idx in 0..patients_per_day_per_surgeon.len() {
+            assert!(patients_per_day_per_surgeon[surgeon_idx].len() == num_days, "num_days is different for different surgeons");
+            for day in 0..num_days {
+                //checking assignment correctness
+                for (first_patient_idx, second_patient_idx) in 
+                    (patients_per_day_per_surgeon[surgeon_idx][day]).iter().tuple_windows() {
+                    let first_patient_ref = &instance.patients[*first_patient_idx];
+                    let second_patient_ref = &instance.patients[*second_patient_idx];
+                    
+                    assert_eq!(first_patient_ref.surgeon_id, instance.surgeons[surgeon_idx].id, 
+                    "patients assigned to wrong surgeons");
+                    assert_eq!(first_patient_ref.surgery_release_day, day, 
+                    "patient assigned to day other than surgery_release_day");
+                    assert!(second_patient_ref.surgery_due_day > first_patient_ref.surgery_due_day || 
+                        ((second_patient_ref.surgery_due_day == first_patient_ref.surgery_due_day) && 
+                        (second_patient_ref.surgery_duration >= first_patient_ref.surgery_duration)),
+                    "increasing ordering patients within day did not work");
+                }
+            }
+        }
+
+    }
+
+    #[test]
+    fn check_arrange_patients_for_surgeons() {
+        //load instance and pass to prelim_day_assignment
+        let result =
+        builder::instance_build(r#"C:\Users\chenv\ihtc2024chen\public_datasets\i01.json"#);
+
+        let Ok(instance) = result else {
+            panic!("{}", result.err().unwrap());
+        };
+        
+        let mut patients_per_day_per_surgeon = prelim_day_assignment(&instance);
+
+        let result: Result<Vec<VecDeque<usize>>, String> = arrange_patients_for_surgeons(&instance, &mut patients_per_day_per_surgeon, None);
+            assert!(result.is_ok(), "{}", result.err().unwrap());
+
+        for surgeon_idx in 0..instance.surgeons.len() {
+            println!("arranging for surgeon {:?}", surgeon_idx);
+            let surgeon_id = &instance.surgeons[surgeon_idx].id;
+
+            // let num_days = patients_per_day_per_surgeon[0].len();
+            for (day, day_deque) in (patients_per_day_per_surgeon[surgeon_idx]).iter().enumerate() {
+                // assert!(Iterator::sum::<u16>(day_deque.iter().map(|x| instance.patients[*x].surgery_duration)) 
+                //     <= instance.surgeons[surgeon_idx].max_surgery_time[day], 
+                // "surgeon duration exceeded");
+
+                let mut patient_duration_sum: u16 = 0;
+                for patient_idx in day_deque {
+                    let patient_ref = &instance.patients[*patient_idx];
+                    assert_eq!(&patient_ref.surgeon_id, surgeon_id);
+                    assert!(patient_ref.surgery_release_day <= day, "assigned day is before release day");
+                    assert!(patient_ref.surgery_due_day >= day, "assigned day is after due day");
+                    patient_duration_sum += patient_ref.surgery_duration;
+                }
+                assert!(patient_duration_sum <= instance.surgeons[surgeon_idx].max_surgery_time[day], 
+                "surgeon {} max_surgery_time exceeded", surgeon_id);
+            }
+        }
+        
+
+    }
 }

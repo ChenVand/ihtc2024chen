@@ -56,7 +56,7 @@ fn deserialize(data: &str) -> Result<Instance, serde_json::Error> {
     Ok(data_struct)
 }
 
-fn instance_build(path: &str) -> Result<Instance, serde_json::Error> {
+pub fn instance_build(path: &str) -> Result<Instance, serde_json::Error> {
     let mut file = File::open(path).unwrap();
     let mut data = String::new();
     file.read_to_string(&mut data).unwrap();
@@ -193,6 +193,18 @@ mod tests {
                 "surgery_duration": 120,
                 "surgeon_id": "s0",
                 "incompatible_room_ids": []
+                },
+                {
+                "id": "p01",
+                "mandatory": true,
+                "gender": "A",
+                "age_group": "elderly",
+                "length_of_stay": 8,
+                "surgery_release_day": 3,
+                "surgery_due_day": 4,
+                "surgery_duration": 120,
+                "surgeon_id": "s0",
+                "incompatible_room_ids": []
                 }
             ],
             "surgeons": [
@@ -215,6 +227,13 @@ mod tests {
                 mandatory: false,
                 surgery_release_day: 3,
                 surgery_due_day: usize::MAX,
+                surgery_duration: 120,
+                surgeon_id: "s0".into()
+            }, Patient{
+                id: "p01".into(),
+                mandatory: true,
+                surgery_release_day: 3,
+                surgery_due_day: 4,
                 surgery_duration: 120,
                 surgeon_id: "s0".into()
             }],
