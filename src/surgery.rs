@@ -5,7 +5,6 @@ use std::collections::VecDeque;
 
 // creates assignment of patients per day per surgeon. usize refers to index in 
 // instance.patients
-// ##patients ordering is in increasing *distance* to due date, and then increasing surgery_duration
 fn prelim_day_assignment(instance: &Instance) -> Vec<Vec<VecDeque<usize>>> {
     // output: patient_day_per_surgeon
     let mut patients_per_day_per_surgeon: Vec<Vec<VecDeque<usize>>> = Vec::new();
@@ -40,6 +39,7 @@ fn prelim_day_assignment(instance: &Instance) -> Vec<Vec<VecDeque<usize>>> {
     patients_per_day_per_surgeon
 }
 
+// ##patients ordering is in decreasing surgery duration, and then increasing *distance* to due date
 fn sort_patients_in_slot(instance: &Instance, patient_indices: &mut VecDeque<usize>) {
     if patient_indices.len() <= 1 {
         return ();
@@ -53,8 +53,9 @@ fn sort_patients_in_slot(instance: &Instance, patient_indices: &mut VecDeque<usi
 
     for j in (0..patient_indices.len()).rev() {
         let curr_patient = &instance.patients[patient_indices[j]];
+
         if curr_patient.surgery_due_day > pivot_due_date || 
-        ((curr_patient.surgery_due_day == pivot_due_date) && (curr_patient.surgery_duration > pivot_duration)) {
+        ((curr_patient.surgery_due_day == pivot_due_date) && (curr_patient.surgery_duration < pivot_duration)) {
             rhs.push_back(patient_indices.remove(j).unwrap());
         }
     }
@@ -68,13 +69,16 @@ fn sort_patients_in_slot(instance: &Instance, patient_indices: &mut VecDeque<usi
 
 //To be parallelized
 fn arrange_patients_for_surgeons(instance: &Instance, patients_per_day_per_surgeon: &mut Vec<Vec<VecDeque<usize>>>, surgeon_spec: Option<&[usize]>) -> Result<Vec<VecDeque<usize>>, String> {
+    #[cfg(test)]
+    println!("instance is: {:#?}", instance);
+    
     let num_surgeons = instance.surgeons.len();
     let mut unassigned_patients: Vec<VecDeque<usize>> = vec![VecDeque::new(); num_surgeons];
     
     match surgeon_spec {
         Some(surgeon_slice) => {
             for surgeon_idx in surgeon_slice {
-                let result = dynamic_arrange_patients_for_surgeon(&instance.surgeons[*surgeon_idx].max_surgery_time, &mut patients_per_day_per_surgeon[*surgeon_idx], 
+                let result = dynamic_by_day_surgery_knapsack(&instance.surgeons[*surgeon_idx].max_surgery_time, &mut patients_per_day_per_surgeon[*surgeon_idx], 
                     0, &instance.patients)?;
                 unassigned_patients[*surgeon_idx] = result;
             }
@@ -84,7 +88,7 @@ fn arrange_patients_for_surgeons(instance: &Instance, patients_per_day_per_surge
                 #[cfg(test)]
                 println!("I am in a test for surgeon {}", surgeon_idx);
 
-                let result = dynamic_arrange_patients_for_surgeon(&instance.surgeons[surgeon_idx].max_surgery_time, &mut patients_per_day_per_surgeon[surgeon_idx], 
+                let result = dynamic_by_day_surgery_knapsack(&instance.surgeons[surgeon_idx].max_surgery_time, &mut patients_per_day_per_surgeon[surgeon_idx], 
                     0, &instance.patients)?;
                 unassigned_patients[surgeon_idx] = result;
             }
@@ -93,14 +97,13 @@ fn arrange_patients_for_surgeons(instance: &Instance, patients_per_day_per_surge
     Ok(unassigned_patients)
 }
 
-
-//##### Serious problemo, either here or in test
-fn dynamic_arrange_patients_for_surgeon(capacity: &Vec<u16>, assignment: &mut Vec<VecDeque<usize>>, first_day: usize, patients: &Vec<Patient>) 
+//##### Serious problemo, either here or in test.
+fn dynamic_by_day_surgery_knapsack(capacity: &Vec<u16>, assignment: &mut Vec<VecDeque<usize>>, first_day: usize, patients: &Vec<Patient>) 
     -> Result<VecDeque<usize>, String> {
 
     assert!(first_day < capacity.len());
 
-    for day in first_day..capacity.len() {
+    'days: for day in first_day..capacity.len() {
         #[cfg(test)]
         println!("Entering day {}", day);
         /*
@@ -110,6 +113,62 @@ fn dynamic_arrange_patients_for_surgeon(capacity: &Vec<u16>, assignment: &mut Ve
             if this did not succeed, undo bump and continue to next iteration. 
         */
 
+        // if there are no patients assigned today (so capacity trivially satisfied)
+        if assignment[day].len() == 0 {
+            continue 'days;
+        }
+
+        'attempts: for _attempt in 0..assignment[day].len() {
+            let mut summed_duration = Iterator::sum::<u16>(assignment[day].iter().map(|x| patients[*x].surgery_duration)); 
+
+            if summed_duration <= capacity[day] {continue 'days;}
+
+            let mut patients_to_bump: VecDeque<usize> = VecDeque::new(); 
+            
+            // collect patients to be bumped
+            'inner: for patient_counter in (0..assignment[day].len()).rev() {
+                if summed_duration > capacity[day] {
+                    patients_to_bump.push_front(assignment[day].remove(patient_counter).unwrap());
+                    summed_duration -= patients[patients_to_bump[0]].surgery_duration;
+                } else {
+                    break 'inner;
+                }
+            }
+
+            // if all patients that could, have been moved and still capacity is not satisfied, then abort.
+            if summed_duration > capacity[day] {
+                return Err(format!("Capacity in day {:?} cannot be reached", day));
+            }
+
+            // bump patients to the next day, or into the abyss if this is the last day
+            //##### modify to remember bumped
+            if day < capacity.len()-1 {
+                for bumped_patient in patients_to_bump {
+                    assignment[day + 1].push_front(bumped_patient);
+                }
+                let result = dynamic_by_day_surgery_knapsack(capacity, assignment, day+1, patients);
+                if result.is_ok() {
+                    return result;
+                } else {
+                    // return bumped patients
+                    let mut returned_patient: usize;
+                    for j in (0..assignment[day+1].len()).rev() {
+                        if patients[assignment[day+1][j]].surgery_release_day <= day {
+                            returned_patient = assignment[day+1].remove(j).unwrap();
+                            assignment[day].push_front(returned_patient);
+                        }
+                    }
+                }
+            } else if day == capacity.len()-1 {
+                return Ok(patients_to_bump);
+            } else {
+                return Err("day exceeded final day somehow".into());
+            }    
+        }
+        // If this is reached, then all attempts failed for day
+        return Err(format!("all attempts failed for day {}", day));
+
+        /*//Previous attempt
         // loop over different attempts (corresponding to different values of start_p) to successfully bump patients out of day
         let mut start_p: usize = assignment[day].len();
         loop {
@@ -123,11 +182,11 @@ fn dynamic_arrange_patients_for_surgeon(capacity: &Vec<u16>, assignment: &mut Ve
 
             // collect patients to be bumped
             'inner: for patient_counter in (0..(start_p-1)).rev() {
-                #[cfg(test)]
-                println!("patient_counter = {}", patient_counter);
+                // #[cfg(test)]
+                // println!("patient_counter = {}", patient_counter);
                 if demanded_duration > capacity[day] {
-                    #[cfg(test)]
-                    println!("demanded_duration = {} is still too high", demanded_duration);
+                    // #[cfg(test)]
+                    // println!("demanded_duration = {} is still too high", demanded_duration);
                     if patients[assignment[day][patient_counter]].surgery_due_day > day {
                         // note patients_to_bump is decreasing
                         patients_to_bump.push_back(patient_counter);
@@ -163,7 +222,7 @@ fn dynamic_arrange_patients_for_surgeon(capacity: &Vec<u16>, assignment: &mut Ve
             }
 
             // try recursion, and if it fails, undo bumping to allow for next attempt with lower start_p
-            let result = dynamic_arrange_patients_for_surgeon(capacity, assignment, day + 1, patients);
+            let result = dynamic_by_day_surgery_knapsack(capacity, assignment, day + 1, patients);
             if result.is_ok() {
                 // note that this means that the outermost day loop stops, and so it only goes up to a problematic day.
                 return result;
@@ -181,15 +240,23 @@ fn dynamic_arrange_patients_for_surgeon(capacity: &Vec<u16>, assignment: &mut Ve
             }
 
             if start_p > 1 {start_p -= 1;} else {return Err("start_p reached end and no valid assignment was found".into());}
-        }
+        }  */
 
     }
     //If this was reached, then all days were valid and no-one needed bumping
-    return Ok(VecDeque::new());  
+    return Ok(VecDeque::new()); 
         
 }
 
-//#####
+//##### todo
+fn dynamic_by_patient_surgery_knapsack(capacity: &Vec<u16>, assignment: &mut Vec<VecDeque<usize>>, first_day: usize, patients: &Vec<Patient>) 
+    -> Result<VecDeque<usize>, String> {todo!()}
+
+//##### todo
+fn lp_relaxation_surgery_knapsack(capacity: &Vec<u16>, assignment: &mut Vec<VecDeque<usize>>, first_day: usize, patients: &Vec<Patient>) 
+    -> Result<VecDeque<usize>, String> {todo!()}
+
+//##### todo
 fn bump_patient(patient_idx: usize) -> Result<(),()> {todo!();}
 
 //##### implement patient bumping of doesn't work
@@ -273,7 +340,7 @@ mod tests {
                     "patient assigned to day other than surgery_release_day");
                     assert!(second_patient_ref.surgery_due_day > first_patient_ref.surgery_due_day || 
                         ((second_patient_ref.surgery_due_day == first_patient_ref.surgery_due_day) && 
-                        (second_patient_ref.surgery_duration >= first_patient_ref.surgery_duration)),
+                        (second_patient_ref.surgery_duration <= first_patient_ref.surgery_duration)),
                     "increasing ordering patients within day did not work");
                 }
             }
