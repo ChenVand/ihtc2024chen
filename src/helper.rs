@@ -69,8 +69,8 @@ fn sort_patients_in_slot(instance: &Instance, patient_indices: &mut VecDeque<usi
 
 //To be parallelized
 fn arrange_patients_for_surgeons(instance: &Instance, patients_per_day_per_surgeon: &mut Vec<Vec<VecDeque<usize>>>, surgeon_spec: Option<&[usize]>) -> Result<Vec<VecDeque<usize>>, String> {
-    #[cfg(test)]
-    println!("instance is: {:#?}", instance);
+    // #[cfg(test)]
+    // println!("instance is: {:#?}", instance);
     
     let num_surgeons = instance.surgeons.len();
     let mut unassigned_patients: Vec<VecDeque<usize>> = vec![VecDeque::new(); num_surgeons];
@@ -97,7 +97,6 @@ fn arrange_patients_for_surgeons(instance: &Instance, patients_per_day_per_surge
     Ok(unassigned_patients)
 }
 
-//##### Serious problemo, either here or in test.
 fn dynamic_by_day_surgery_knapsack(capacity: &Vec<u16>, assignment: &mut Vec<VecDeque<usize>>, first_day: usize, patients: &Vec<Patient>) 
     -> Result<VecDeque<usize>, String> {
 
@@ -361,11 +360,14 @@ mod tests {
         let mut patients_per_day_per_surgeon = prelim_day_assignment(&instance);
 
         let result: Result<Vec<VecDeque<usize>>, String> = arrange_patients_for_surgeons(&instance, &mut patients_per_day_per_surgeon, None);
-            assert!(result.is_ok(), "{}", result.err().unwrap());
-
+            let Ok(unassigned_per_surgeon) = result else {
+                panic!("{}", result.err().unwrap())
+            };
+            
         for surgeon_idx in 0..instance.surgeons.len() {
             println!("arranging for surgeon {:?}", surgeon_idx);
             let surgeon_id = &instance.surgeons[surgeon_idx].id;
+            assert!(unassigned_per_surgeon[surgeon_idx].len() <= 3, "more than 4 unassigned for surgeon {}", surgeon_id);
 
             // let num_days = patients_per_day_per_surgeon[0].len();
             for (day, day_deque) in (patients_per_day_per_surgeon[surgeon_idx]).iter().enumerate() {
