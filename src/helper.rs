@@ -39,7 +39,7 @@ fn prelim_day_assignment(instance: &Instance) -> Vec<Vec<VecDeque<usize>>> {
     patients_per_day_per_surgeon
 }
 
-// ##patients ordering is in decreasing surgery duration, and then increasing *distance* to due date
+//patients ordering is in decreasing surgery duration, and then increasing *distance* to due date
 fn sort_patients_in_slot(instance: &Instance, patient_indices: &mut VecDeque<usize>) {
     if patient_indices.len() <= 1 {
         return ();
@@ -249,10 +249,6 @@ fn dynamic_by_day_surgery_knapsack(capacity: &Vec<u16>, assignment: &mut Vec<Vec
 
 //##### todo
 fn dynamic_by_patient_surgery_knapsack(capacity: &Vec<u16>, assignment: &mut Vec<VecDeque<usize>>, first_day: usize, patients: &Vec<Patient>) 
-    -> Result<VecDeque<usize>, String> {todo!()}
-
-//##### todo
-fn lp_relaxation_surgery_knapsack(capacity: &Vec<u16>, assignment: &mut Vec<VecDeque<usize>>, first_day: usize, patients: &Vec<Patient>) 
     -> Result<VecDeque<usize>, String> {todo!()}
 
 //##### todo
