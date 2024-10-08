@@ -1,5 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque, BTreeMap};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::sync::mpsc::channel;
 use std::path::is_separator;
 use itertools::Itertools;
 use rand;
@@ -14,15 +17,21 @@ enum SurgeryKnapsackSolver {
 // returns vec with instance.days+1 entries (final entry is unassigned patients)
 pub fn lp_relaxation_surgery_knapsack(instance: &Instance, surgeon_idx: usize)
     -> Result<Vec<VecDeque<usize>>, String> {
-        let bump_penalty = 80;
         let patients = &instance.patients;
         let capacities = &instance.surgeons[surgeon_idx].max_surgery_time;
         let relevant_patient_idxs = (0..patients.len()).filter(|idx| 
             patients[*idx].surgeon_id == instance.surgeons[surgeon_idx].id).collect::<Vec<usize>>();
 
-        //#####TRASH
-        // let durations: Vec<u16> = patients.iter().map(|x| x.surgery_duration).collect();
-        // let is_mandatory: Vec<bool> = relevant_patient_idxs.iter().map(|patient_idx| patients[*patient_idx].mandatory).collect();
+        // Define weights for minimization function
+        let mandatory_multiplier = 5;
+        let bump_weight = 50;
+        let weight_func = |idx: usize, day: usize| {
+            if patients[idx].mandatory {
+                (mandatory_multiplier * (day - patients[idx].surgery_release_day)) as f64
+            } else {
+                (if day < instance.days {day - patients[idx].surgery_release_day} else {bump_weight}) as f64
+            }
+        };
 
         #[cfg(test)]
         println!("number of days: {:?}", capacities.len());
@@ -50,8 +59,7 @@ pub fn lp_relaxation_surgery_knapsack(instance: &Instance, surgeon_idx: usize)
             
             // Introduce variables
             for day in first_day..=final_day {
-                patient_dict.insert(day, problem.add_var(
-                    (if day < instance.days {day - first_day} else {bump_penalty}) as f64, (0.0, 1.0)));
+                patient_dict.insert(day, problem.add_var(weight_func(*patient_idx, day), (0.0, 1.0)));
             }
             
             // Introduce patient spread constraints
@@ -103,8 +111,7 @@ pub fn lp_relaxation_surgery_knapsack(instance: &Instance, surgeon_idx: usize)
             }
         });
 
-        //##### Perhaps modify this to take the bast of a few attempts, or to implement some backtracking
-        //Assign patients randomly according to day dist.
+        //Assign patients randomly according to distribution of day variables of this patient.
         let mut patient_assignment_vec: Vec<VecDeque<usize>> = vec![VecDeque::new(); instance.days + 1];
         let mut available_capacities = capacities.clone();
         for &(patient_idx, _) in &patient_entropy_vector {
@@ -159,11 +166,67 @@ pub fn lp_relaxation_surgery_knapsack(instance: &Instance, surgeon_idx: usize)
                     available_capacities));
             }
         }
+        
+        //Squeeze in bumped patients if possible
+        loop {
+            if patient_assignment_vec[instance.days].len() == 0 {break;}
+
+            //patient_assignment_vec[instance.days] is a VecDeque of indices (in instance.patients) of patients that were not assigned.
+            let (j, min_duration) = patient_assignment_vec[instance.days].iter().enumerate().map(|(j, &idx)| (j, patients[idx].surgery_duration)).min_by(
+                |a, b| a.1.cmp(&b.1)
+            ).unwrap();
+            //available_capacities has length instance.days
+            let (day, &max_capacity) = available_capacities.iter().enumerate().max_by(|a, b| a.1.cmp(&b.1)).unwrap();
+            
+            if min_duration <= max_capacity {
+                //patient patient_assignment_vec[instance.days][j] can be assigned to day.
+                let moved_patient_idx = patient_assignment_vec[instance.days].remove(j).unwrap();
+                #[cfg(test)]
+                println!("squeezing patient {moved_patient_idx} to day {day}");
+
+                patient_assignment_vec[day].push_back(moved_patient_idx);
+                available_capacities[day] -= min_duration;
+            } else {
+                //No patient can be squeezed.
+                break;
+            }
+        }
+
         #[cfg(test)]
-        println!("{patient_assignment_vec:?}");
+        println!("Unassigned patients and their durations: {:?}", patient_assignment_vec[instance.days].iter().map(|&idx| (idx, patients[idx].surgery_duration)).collect_vec());
+        #[cfg(test)]
+        println!("remaining capacities: {available_capacities:?}");
 
         Ok(patient_assignment_vec)
     }
+
+pub fn assign_surgery_days(instance: &Instance, solver: SurgeryKnapsackSolver) {
+    let num_threads = 4;
+    let surgeon_idx: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+    // let instance = Arc::new(&instance);
+    let (tx, rx) = channel();
+
+    thread::scope(|s| {
+        for _ in 0..num_threads {
+            s.spawn(|| {
+                let (idx, tx) = (Arc::clone(&surgeon_idx), tx.clone());
+
+                loop {
+                    let mut current_surgeon_idx = idx.lock().unwrap();
+                    if *current_surgeon_idx == instance.surgeons.len() {
+                        break;
+                    }
+                    let surgeon_idx = current_surgeon_idx.clone();
+                    *current_surgeon_idx += 1;
+                    
+                    tx.send(lp_relaxation_surgery_knapsack(instance, surgeon_idx)).unwrap();
+                }
+            });
+        }
+
+        // Collect results here
+    });
+}
 
 #[cfg(test)]
 mod tests {
@@ -174,15 +237,38 @@ mod tests {
     #[test]
     fn check_lp_relax_day_assign_per_surgeon() {
         let result =
-        builder::instance_build(r#"C:\Users\chenv\ihtc2024chen\public_datasets\i12.json"#);
+        builder::instance_build(r#"C:\Users\chenv\ihtc2024chen\public_datasets\i10.json"#);
 
         let Ok(instance) = result else {
             panic!("{}", result.err().unwrap());
         };
         
         let result = lp_relaxation_surgery_knapsack(&instance, 0);
-        let Ok(patients_per_day_per_surgeon) = result else{
+        let Ok(patients_per_day) = result else{
             panic!("{}", result.err().unwrap());
         };
+
+        for (day, day_deque) in patients_per_day.iter().enumerate() {
+            if day == instance.days {
+                continue;
+            }
+
+            let mut patient_duration_sum: u16 = 0;
+            for patient_idx in day_deque {
+                let patient_ref = &instance.patients[*patient_idx];
+                assert!(patient_ref.surgery_release_day <= day, "assigned day is before release day");
+                assert!(patient_ref.surgery_due_day >= day, "assigned day is after due day");
+                patient_duration_sum += patient_ref.surgery_duration;
+            }
+            assert!(patient_duration_sum <= instance.surgeons[0].max_surgery_time[day], 
+            "surgeon max_surgery_time exceeded");
+        }
+
+        for &idx in patients_per_day[instance.days].iter() {
+            assert!(!instance.patients[idx].mandatory, "A mandatory patient was bumped.");
+        }
+
+        // //At most 10 patients were bumped
+        // assert!(patients_per_day[instance.days].len() < 10);
     }
 }
