@@ -14,8 +14,17 @@ enum SurgeryKnapsackSolver {
     DynamicByDay
 }
 
+//###### does this help
+pub struct DayAssignment {
+    per_surgeon_per_day: Vec<Vec<VecDeque<usize>>>,
+    assignment_start_day: usize,
+    locked_patient_indices: Vec<usize>,
+}
+
+//##### incorporate lock_info, to accommodate patient bumping
+//##### Consider giving higher weights to earlier days, due to successive locking
 // returns vec with instance.days+1 entries (final entry is unassigned patients)
-pub fn lp_relaxation_surgery_knapsack(instance: &Instance, surgeon_idx: usize)
+pub fn lp_relaxation_surgery_knapsack(instance: &Instance, surgeon_idx: usize, )
     -> Result<Vec<VecDeque<usize>>, String> {
         let patients = &instance.patients;
         let capacities = &instance.surgeons[surgeon_idx].max_surgery_time;
@@ -33,6 +42,7 @@ pub fn lp_relaxation_surgery_knapsack(instance: &Instance, surgeon_idx: usize)
             }
         };
 
+        /*
         #[cfg(test)]
         println!("number of days: {:?}", capacities.len());
         #[cfg(test)]
@@ -40,8 +50,8 @@ pub fn lp_relaxation_surgery_knapsack(instance: &Instance, surgeon_idx: usize)
         #[cfg(test)]
         println!("number of patients: {:?}, of which mandatory: {:?}", relevant_patient_idxs.len(), 
             relevant_patient_idxs.iter().filter(|&&idx| instance.patients[idx].mandatory).collect_vec().len());
-        // #[cfg(test)]
-        // println!("durations: {:?}", relevant_patient_idxs.iter().map(|&idx| patients[idx].surgery_duration).collect_vec());
+        */
+        
 
         // Setting up LP
         let mut variable_dict: BTreeMap<usize, BTreeMap<usize, Variable>> = BTreeMap::new(); //X_{patient_idx, day}
@@ -78,10 +88,16 @@ pub fn lp_relaxation_surgery_knapsack(instance: &Instance, surgeon_idx: usize)
         // Solve LP
         let solver_result = problem.solve();
         let Ok(solution_of_lp) = solver_result else {
+            #[cfg(test)]
+            println!("LP solver didn't work for surgeon {}, returned error {}.", surgeon_idx, solver_result.clone().err().unwrap());
+
             return Err(format!("Solver didn't work. Gave error: {}", solver_result.err().unwrap()));
         };
+
+        /*
         #[cfg(test)]
         println!("{solution_of_lp:?}");
+        */
 
         //Sort patients according to entropy of distribution of their corresponding variables. This order will be used in the rounding of next step       
         let mut patient_entropy_vector: Vec<(usize, f64)> = Vec::new();
@@ -98,8 +114,6 @@ pub fn lp_relaxation_surgery_knapsack(instance: &Instance, surgeon_idx: usize)
             patient_entropy_vector.push((*patient_idx, running_entropy));
         }
 
-        // #[cfg(test)]
-        // println!("length of entropy vector before sorting: {}", patient_entropy_vector.len());
         patient_entropy_vector.sort_by(|a, b| {
             //first order my mandatory
             if patients[a.0].mandatory != patients[b.0].mandatory {
@@ -115,18 +129,21 @@ pub fn lp_relaxation_surgery_knapsack(instance: &Instance, surgeon_idx: usize)
         let mut patient_assignment_vec: Vec<VecDeque<usize>> = vec![VecDeque::new(); instance.days + 1];
         let mut available_capacities = capacities.clone();
         for &(patient_idx, _) in &patient_entropy_vector {
+            /*
             #[cfg(test)]
             if true {
                 println!("Patient {}, variables: {:?}, first day: {}", patient_idx,
                 variable_dict.get(&patient_idx).unwrap().iter().map(|x| solution_of_lp[*(x.1)]).collect::<Vec<f64>>(),
                 instance.patients[patient_idx].surgery_release_day);
             }
-
+            */
+            
             let duration = patients[patient_idx].surgery_duration;
             let mut conditional_divider = 1.0;
             let mut cancelled_days: HashMap<usize, ()> = HashMap::new();
             //Attempt rounding. Attempts will fail if not enough capacity in chosen day
             'outer: loop {
+                //##### look into seed
                 let random_num: f64 = rand::random();
                 let mut cumul_prob = 0.0;
                 'inner: for (day, var) in variable_dict.get(&patient_idx).unwrap() {
@@ -134,7 +151,7 @@ pub fn lp_relaxation_surgery_knapsack(instance: &Instance, surgeon_idx: usize)
                         continue 'inner;
                     }
                     cumul_prob += solution_of_lp[*var] / conditional_divider;
-                    if random_num < (cumul_prob - 1e-10) {
+                    if random_num < (cumul_prob + 1e-6) {
                         if *day == instance.days {
                             patient_assignment_vec[*day].push_back(patient_idx);
                             break 'outer;
@@ -146,7 +163,7 @@ pub fn lp_relaxation_surgery_knapsack(instance: &Instance, surgeon_idx: usize)
                             cancelled_days.insert(*day, ());
                             conditional_divider -= solution_of_lp[*var];
                             //If all non-zero days are cancelled, assign to last day:
-                            if !(conditional_divider > 0.0) {
+                            if !(conditional_divider > 1e-6) {
                                 if !patients[patient_idx].mandatory {
                                     patient_assignment_vec[instance.days].push_back(patient_idx);
                                     break 'outer;
@@ -159,10 +176,15 @@ pub fn lp_relaxation_surgery_knapsack(instance: &Instance, surgeon_idx: usize)
                         }
                     }
                 }
-                //########## Why do I reach here?
+                
+                /*
+                #[cfg(test)]
+                println!("Rounding failed for surgeon {surgeon_idx}");
                 #[cfg(test)]
                 println!("Random number was {random_num}");
-                return Err(format!("Unable to assign for for patient {}, with details: {:?}, and remaining capacities{:?}.", patient_idx, patients[patient_idx],
+                */
+
+                return Err(format!("Unable to assign for for patient {}, with details: {:?}. Remaining capacities{:?}.", patient_idx, patients[patient_idx],
                     available_capacities));
             }
         }
@@ -181,8 +203,10 @@ pub fn lp_relaxation_surgery_knapsack(instance: &Instance, surgeon_idx: usize)
             if min_duration <= max_capacity {
                 //patient patient_assignment_vec[instance.days][j] can be assigned to day.
                 let moved_patient_idx = patient_assignment_vec[instance.days].remove(j).unwrap();
+                /*
                 #[cfg(test)]
                 println!("squeezing patient {moved_patient_idx} to day {day}");
+                */
 
                 patient_assignment_vec[day].push_back(moved_patient_idx);
                 available_capacities[day] -= min_duration;
@@ -193,24 +217,31 @@ pub fn lp_relaxation_surgery_knapsack(instance: &Instance, surgeon_idx: usize)
         }
 
         #[cfg(test)]
-        println!("Unassigned patients and their durations: {:?}", patient_assignment_vec[instance.days].iter().map(|&idx| (idx, patients[idx].surgery_duration)).collect_vec());
+        println!("Unassigned patients for surgeon {surgeon_idx}: {:?}", patient_assignment_vec[instance.days].iter().map(|&idx| (idx, patients[idx].surgery_duration)).collect_vec());
         #[cfg(test)]
-        println!("remaining capacities: {available_capacities:?}");
+        println!("remaining capacities for surgeon {surgeon_idx}: {available_capacities:?}");
 
         Ok(patient_assignment_vec)
     }
 
-pub fn assign_surgery_days(instance: &Instance, solver: SurgeryKnapsackSolver) {
+//#####Return assignments.
+//##### return array where first idx is by day, not surgeon.
+//#####Important: return also LP problem: Problem, so that additional constraints can be added due to OT/room infeasibility
+pub fn assign_surgery_days(instance: &Instance) {
     let num_threads = 4;
     let surgeon_idx: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
-    // let instance = Arc::new(&instance);
     let (tx, rx) = channel();
+
+    //will collect assignments with surgeon index
+    let mut assignments: Vec<(usize, Vec<VecDeque<usize>>)> = Vec::new();
+    //######## Also collect errors
+    //let mut errors
 
     thread::scope(|s| {
         for _ in 0..num_threads {
-            s.spawn(|| {
-                let (idx, tx) = (Arc::clone(&surgeon_idx), tx.clone());
-
+            let (idx, tx) = (Arc::clone(&surgeon_idx), tx.clone());
+            let instance_1 = instance;
+            s.spawn(move || {
                 loop {
                     let mut current_surgeon_idx = idx.lock().unwrap();
                     if *current_surgeon_idx == instance.surgeons.len() {
@@ -219,14 +250,28 @@ pub fn assign_surgery_days(instance: &Instance, solver: SurgeryKnapsackSolver) {
                     let surgeon_idx = current_surgeon_idx.clone();
                     *current_surgeon_idx += 1;
                     
-                    tx.send(lp_relaxation_surgery_knapsack(instance, surgeon_idx)).unwrap();
+                    tx.send((surgeon_idx, lp_relaxation_surgery_knapsack(instance_1, surgeon_idx))).unwrap();
                 }
             });
         }
 
         // Collect results here
+        for _ in 0..instance.surgeons.len() {
+            let (surgeon_idx, lp_knapsack_result) = rx.recv().unwrap();
+            if lp_knapsack_result.is_ok() {
+                assignments.push((surgeon_idx, lp_knapsack_result.ok().unwrap()));
+            }
+            //#######handle errors.
+        }
+
+        #[cfg(test)]
+        println!("{} surgeons succeeded out of {}", assignments.len(), instance.surgeons.len());
     });
 }
+
+//#####disallow patient from being assigned to current or passed days. Also, lock patients in previous days.
+pub fn bump_patient() {}
+
 
 #[cfg(test)]
 mod tests {
@@ -234,16 +279,30 @@ mod tests {
     use crate::builder;
     use itertools::Itertools;
 
-    #[test]
-    fn check_lp_relax_day_assign_per_surgeon() {
+    fn prepper() -> Instance {
         let result =
-        builder::instance_build(r#"C:\Users\chenv\ihtc2024chen\public_datasets\i10.json"#);
+        builder::instance_build(r#"C:\Users\chenv\ihtc2024chen\public_datasets\i13.json"#);
 
         let Ok(instance) = result else {
             panic!("{}", result.err().unwrap());
         };
+
+        instance
+    }
+
+    #[test]
+    fn check_assign_surgery_days() {
+        let instance = prepper();
+
+        assign_surgery_days(&instance);
+    }
+
+    #[test]
+    fn check_lp_relax_day_assign_per_surgeon() {
+        let instance = prepper();
+        let surgeon_idx: usize = 1;
         
-        let result = lp_relaxation_surgery_knapsack(&instance, 0);
+        let result = lp_relaxation_surgery_knapsack(&instance, surgeon_idx);
         let Ok(patients_per_day) = result else{
             panic!("{}", result.err().unwrap());
         };
@@ -260,7 +319,7 @@ mod tests {
                 assert!(patient_ref.surgery_due_day >= day, "assigned day is after due day");
                 patient_duration_sum += patient_ref.surgery_duration;
             }
-            assert!(patient_duration_sum <= instance.surgeons[0].max_surgery_time[day], 
+            assert!(patient_duration_sum <= instance.surgeons[surgeon_idx].max_surgery_time[day], 
             "surgeon max_surgery_time exceeded");
         }
 
