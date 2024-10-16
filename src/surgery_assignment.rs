@@ -14,13 +14,7 @@ enum SurgeryKnapsackSolver {
     DynamicByDay
 }
 
-//###### does this help
-pub struct DayAssignment {
-    per_surgeon_per_day: Vec<Vec<VecDeque<usize>>>,
-    assignment_start_day: usize,
-    locked_patient_indices: Vec<usize>,
-}
-
+//##### This is also the initializer function for the struct
 //##### incorporate lock_info, to accommodate patient bumping
 //##### Consider giving higher weights to earlier days, due to successive locking
 // returns vec with instance.days+1 entries (final entry is unassigned patients)

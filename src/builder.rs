@@ -11,14 +11,26 @@ pub struct Instance {
     // skill_levels: u8,
     // shift_types: Vec<String>,
     // age_groups
-    // weights
+    pub weights: Weights,
     // occupants
     pub patients: Vec<Patient>,
     pub surgeons: Vec<Surgeon>,
-    pub operating_theaters: Vec<OperatingTheater>,
+    pub theaters: Vec<Theater>,
     //rooms
     //nurses
 }
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct Weights {
+    pub room_mixed_age: f64,
+    pub room_nurse_skill: f64,
+    pub continuity_of_care: f64,
+    pub nurse_eccessive_workload: f64,
+    pub open_operating_theater: f64,
+    pub surgeon_transfer: f64,
+    pub patient_delay: f64,
+    pub unscheduled_optional: f64,
+  }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct Patient {
@@ -42,8 +54,8 @@ pub struct Surgeon {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct OperatingTheater {
-    id: String,
+pub struct Theater {
+    pub id: String,
     pub availability: Vec<u16>,
 }
 
@@ -82,6 +94,16 @@ mod tests {
 
         let data = r#"{
             "days": 14,
+            "weights": {
+                "room_mixed_age": 5,
+                "room_nurse_skill": 1,
+                "continuity_of_care": 1,
+                "nurse_eccessive_workload": 10,
+                "open_operating_theater": 30,
+                "surgeon_transfer": 1,
+                "patient_delay": 10,
+                "unscheduled_optional": 300
+            },
             "patients": [
                 {
                 "id": "p00",
@@ -127,7 +149,7 @@ mod tests {
                 ]
                 }
             ],
-            "operating_theaters": [
+            "theaters": [
                 {
                 "id": "t0",
                 "availability": [
@@ -182,6 +204,16 @@ mod tests {
 
         let data = r#"{
             "days": 14,
+            "weights": {
+                "room_mixed_age": 5,
+                "room_nurse_skill": 1,
+                "continuity_of_care": 1,
+                "nurse_eccessive_workload": 10,
+                "open_operating_theater": 30,
+                "surgeon_transfer": 1,
+                "patient_delay": 10,
+                "unscheduled_optional": 300
+            },
             "patients": [
                 {
                 "id": "p00",
@@ -209,7 +241,7 @@ mod tests {
             ],
             "surgeons": [
             ],
-            "operating_theaters": [
+            "theaters": [
                 {
                 "id": "t1",
                 "availability": [
@@ -222,6 +254,16 @@ mod tests {
 
         let desired_data_struct = Instance{
             days: 14, 
+            weights: Weights {
+                room_mixed_age: 5.0,
+                room_nurse_skill: 1.0,
+                continuity_of_care: 1.0,
+                nurse_eccessive_workload: 10.0,
+                open_operating_theater: 30.0,
+                surgeon_transfer: 1.0,
+                patient_delay: 10.0,
+                unscheduled_optional: 300.0
+            },
             patients: vec![Patient{
                 id: "p00".into(),
                 mandatory: false,
@@ -238,7 +280,7 @@ mod tests {
                 surgeon_id: "s0".into()
             }],
             surgeons: vec![],
-            operating_theaters: vec![OperatingTheater{
+            theaters: vec![Theater{
                 id: "t1".into(),
                 availability: vec![480, 600]
             }]
