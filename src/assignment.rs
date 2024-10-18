@@ -3,13 +3,14 @@ use std::collections::{VecDeque, BTreeMap};
 
 pub struct Assignment<'a> {
     pub instance: &'a Instance,
-    in_progress: bool,
-    patients_per_day_per_surgeon: Vec<Vec<VecDeque<usize>>>,
+    pub in_progress: bool,
+    //key: surgeon_idx, value: patient deques per day
+    pub patients_per_day_per_surgeon: BTreeMap<usize, Vec<VecDeque<usize>>>,
 }
 
 //Implemented only for partitions of size 2
-pub struct SurgeonPartitionInfo<'b> {
-    pub patient_deq: &'b VecDeque<usize>,
+pub struct SurgeonPartitionInfo {
+    // pub patient_deq: &'b VecDeque<usize>,
     pub total_duration: u16,
     pub partition_location: usize,
     pub partitioned_durations: (u16, u16),
@@ -25,11 +26,11 @@ impl<'a> Assignment<'a> {
         };
 
         for surgeon_idx in 0..self.instance.surgeons.len() {
-            let patient_deq: &VecDeque<usize> =  &self.patients_per_day_per_surgeon[surgeon_idx][day];
+            let patient_deq: &VecDeque<usize> =  &self.patients_per_day_per_surgeon.get(&surgeon_idx).unwrap()[day];
             let duration_vec: Vec<u16> = patient_deq.iter().map(|&idx| self.instance.patients[idx].surgery_duration).collect();
             let partition_location = get_partition_idx(patient_deq);
             surgeon_durations_map.insert(surgeon_idx, SurgeonPartitionInfo{
-                patient_deq,
+                // patient_deq,
                 total_duration: duration_vec.iter().sum(),
                 partition_location,
                 partitioned_durations: {

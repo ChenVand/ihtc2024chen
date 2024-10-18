@@ -7,6 +7,7 @@ use std::path::is_separator;
 use itertools::Itertools;
 use rand;
 use minilp::{Variable, Problem, OptimizationDirection, ComparisonOp};
+use crate::assignment::Assignment;
 use crate::builder::{Instance, Patient};
 
 enum SurgeryKnapsackSolver {
@@ -14,11 +15,8 @@ enum SurgeryKnapsackSolver {
     DynamicByDay
 }
 
-//##### This is also the initializer function for the struct
-//##### incorporate lock_info, to accommodate patient bumping
-//##### Consider giving higher weights to earlier days, due to successive locking
 // returns vec with instance.days+1 entries (final entry is unassigned patients)
-pub fn lp_relaxation_surgery_knapsack(instance: &Instance, surgeon_idx: usize, )
+pub fn lp_relaxation_surgery_knapsack(instance: &Instance, surgeon_idx: usize)
     -> Result<Vec<VecDeque<usize>>, String> {
         let patients = &instance.patients;
         let capacities = &instance.surgeons[surgeon_idx].max_surgery_time;
@@ -218,53 +216,56 @@ pub fn lp_relaxation_surgery_knapsack(instance: &Instance, surgeon_idx: usize, )
         Ok(patient_assignment_vec)
     }
 
-//#####Return assignments.
-//##### return array where first idx is by day, not surgeon.
-//#####Important: return also LP problem: Problem, so that additional constraints can be added due to OT/room infeasibility
-pub fn assign_surgery_days(instance: &Instance) {
-    let num_threads = 4;
-    let surgeon_idx: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
-    let (tx, rx) = channel();
-
-    //will collect assignments with surgeon index
-    let mut assignments: Vec<(usize, Vec<VecDeque<usize>>)> = Vec::new();
-    //######## Also collect errors
-    //let mut errors
-
-    thread::scope(|s| {
-        for _ in 0..num_threads {
-            let (idx, tx) = (Arc::clone(&surgeon_idx), tx.clone());
-            let instance_1 = instance;
-            s.spawn(move || {
-                loop {
-                    let mut current_surgeon_idx = idx.lock().unwrap();
-                    if *current_surgeon_idx == instance.surgeons.len() {
-                        break;
-                    }
-                    let surgeon_idx = current_surgeon_idx.clone();
-                    *current_surgeon_idx += 1;
-                    
-                    tx.send((surgeon_idx, lp_relaxation_surgery_knapsack(instance_1, surgeon_idx))).unwrap();
-                }
-            });
-        }
-
-        // Collect results here
-        for _ in 0..instance.surgeons.len() {
-            let (surgeon_idx, lp_knapsack_result) = rx.recv().unwrap();
-            if lp_knapsack_result.is_ok() {
-                assignments.push((surgeon_idx, lp_knapsack_result.ok().unwrap()));
-            }
-            //#######handle errors.
-        }
-
-        #[cfg(test)]
-        println!("{} surgeons succeeded out of {}", assignments.len(), instance.surgeons.len());
-    });
-}
-
 //#####disallow patient from being assigned to current or passed days. Also, lock patients in previous days.
 pub fn bump_patient() {}
+
+impl<'a> Assignment<'a> {
+
+    //#####? return also LP problem: Problem, so that additional constraints can be added due to OT/room infeasibility
+    pub fn assign_surgery_days(instance: &'a Instance) -> Result<Self, String> {
+        let num_threads = 4;
+        let surgeon_idx: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+        let (tx, rx) = channel();
+
+        //will collect assignments with surgeon index
+        let mut assignments: BTreeMap<usize, Vec<VecDeque<usize>>> = BTreeMap::new();
+        //######## Also collect errors
+        //let mut errors
+
+        thread::scope(|s| {
+            for _ in 0..num_threads {
+                let (idx, tx) = (Arc::clone(&surgeon_idx), tx.clone());
+                let instance_1 = instance;
+                s.spawn(move || {
+                    loop {
+                        let mut current_surgeon_idx = idx.lock().unwrap();
+                        if *current_surgeon_idx == instance.surgeons.len() {
+                            break;
+                        }
+                        let surgeon_idx = current_surgeon_idx.clone();
+                        *current_surgeon_idx += 1;
+                        
+                        tx.send((surgeon_idx, lp_relaxation_surgery_knapsack(instance_1, surgeon_idx))).unwrap();
+                    }
+                });
+            }
+
+            // Collect results here
+            for _ in 0..instance.surgeons.len() {
+                let (surgeon_idx, lp_knapsack_result) = rx.recv().unwrap();
+                if lp_knapsack_result.is_ok() {
+                    assignments.insert(surgeon_idx, lp_knapsack_result.ok().unwrap());
+                }
+                //#######what if surgeon assignment failed?
+            }
+
+            #[cfg(test)]
+            println!("{} surgeons succeeded out of {}", assignments.len(), instance.surgeons.len());
+        });
+    
+    Ok(Assignment { instance: instance, in_progress: true, patients_per_day_per_surgeon: assignments })
+    }
+}
 
 
 #[cfg(test)]
@@ -288,7 +289,7 @@ mod tests {
     fn check_assign_surgery_days() {
         let instance = prepper();
 
-        assign_surgery_days(&instance);
+        Assignment::assign_surgery_days(&instance);
     }
 
     #[test]

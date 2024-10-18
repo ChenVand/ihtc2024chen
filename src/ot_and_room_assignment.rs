@@ -4,7 +4,7 @@ use minilp::{Variable, Problem, OptimizationDirection, ComparisonOp};
 
 use crate::surgery_assignment;
 use crate::builder::{Instance, Patient};
-use crate::assignment::Assignment;
+use crate::assignment::{Assignment, SurgeonPartitionInfo};
 
 /*Assign OT and room day by day, and if infeasible then call surgery_assignment::bump_patient
 to re-assign from that day forward while keeping previous days intact.
@@ -12,34 +12,24 @@ To do this, need to chose patient to bump. Recommended patient should have small
 
 // pub fn assign_ots_and_rooms(instance: &Instance, day_assignment: &mut DayAssignment) {todo!();}
 
-impl<'a> Assignment<'a> {
+struct Bin {
+    theater_idx: usize,
+    capacity: u16,
+    importance_weight: f64
+}
 
-    fn patient_OT_assignment_for_day(&mut self, day: usize) {
-        /*Returns patients-by-OT assignment (according to ot index in theaters).  */  
-        // outer Vec corresponds to OTs as ordered in instance.operating_theaters
-    
-        let instance = self.instance;
-        let num_bins = instance.theaters.len();
-        let num_surgeons = instance.surgeons.len();
+//####################
+fn lp_various_bin_packing(
+    num_bins: usize, 
+    num_surgeons: usize,
+    surgeon_transfer_weight: f64,
+    new_bin_weight: f64,
+    bin_capacity_vec: Vec<u16>,
+    bins: BTreeMap<usize, Bin>,
+    surgeon_durations_partition_map: BTreeMap<usize, SurgeonPartitionInfo>
+    ) -> Result<(), String> {
 
-        // each surgeon is named and weighted: vec[i]: ((surgeon_idx, tot_duration), VecDeque<(patient_idx, duration)>)
-        let surgeon_durations_partition_map = self.get_surgeon_durations_partition_map(day);
-
-        // Set up bin_gradient
-        struct Bin {
-            theater_idx: usize,
-            capacity: u16,
-            gradient_weight: f64
-        }
-        let mut bins: BTreeMap<usize, Bin> = BTreeMap::new();
-        let mut bin_capacity_vec = instance.theaters.iter().enumerate()
-        .map(|(idx, theater)| (idx, theater.availability[day])).collect_vec();
-        bin_capacity_vec.sort_by(|a,b| b.1.cmp(&a.1));       
-        bin_capacity_vec.into_iter().enumerate()
-        .map(|(order, (idx, capacity))| {
-            bins.insert(idx, Bin{theater_idx: idx, capacity, gradient_weight: order as f64})
-        }).collect_vec();
-        let bin_gradient_weight = |bin_idx: usize| {bins.get(&bin_idx).unwrap().gradient_weight};
+        let bin_gradient_weight = |bin_idx: usize| {bins.get(&bin_idx).unwrap().importance_weight};
     
         // Setting up LP   
         let mut problem = Problem::new(OptimizationDirection::Minimize);
@@ -53,7 +43,7 @@ impl<'a> Assignment<'a> {
                     for j in 0..=i {
                         if j==0 {
                             x_map.insert((surgeon_idx, bin_idx, i, j), 
-                                problem.add_var(i as f64 * instance.weights.surgeon_transfer + bin_gradient_weight(bin_idx),
+                                problem.add_var(i as f64 * surgeon_transfer_weight + bin_gradient_weight(bin_idx),
                                 (0.0, 1.0)));
                         } else {
                             x_map.insert((surgeon_idx, bin_idx, i, j), 
@@ -67,7 +57,7 @@ impl<'a> Assignment<'a> {
         //Bin variables Y_bin
         let mut y_map: BTreeMap<usize, Variable> = BTreeMap::new();
         for bin_idx in 0..num_bins {
-            y_map.insert(bin_idx, problem.add_var(instance.weights.open_operating_theater, (0.0, 1.0)));
+            y_map.insert(bin_idx, problem.add_var(new_bin_weight, (0.0, 1.0)));
         }
     
         // Constraint X^(i,0)=X^(i,1)=...=X^(i,i)
@@ -117,16 +107,66 @@ impl<'a> Assignment<'a> {
                     }
                 }
             }
-            summands.push((*y_map.get(&bin_idx).unwrap(), instance.theaters[bin_idx].availability[day] as f64));
+            summands.push((*y_map.get(&bin_idx).unwrap(), bin_capacity_vec[bin_idx] as f64));
             problem.add_constraint(summands, ComparisonOp::Ge, 0.0);
         }
 
-        //##### solve LP
+        //solve LP
+        let solver_result = problem.solve();
+        let Ok(solution_of_lp) = solver_result else {
+            #[cfg(test)]
+            println!("LP solver didn't work, returned error {}.", solver_result.clone().err().unwrap());
+
+            return Err(format!("Solver didn't work. Gave error: {}", solver_result.err().unwrap()));
+        };
 
         //##### perform rounding
 
-        //##### if didn't work, return error so that patient will be bumped
+        //#####Temporary
+        Ok(())
+    }
 
+impl<'a> Assignment<'a> {
+
+    fn patient_OT_assignment_for_day(&mut self, day: usize) -> Result<(), String> {
+        /*Returns patients-by-OT assignment (according to ot index in theaters).  */  
+        // outer Vec corresponds to OTs as ordered in instance.operating_theaters
+    
+        let instance = self.instance;
+
+        let num_bins: usize = instance.theaters.len();
+        let num_surgeons: usize = instance.surgeons.len();
+        let surgeon_transfer_weight: f64 = instance.weights.surgeon_transfer;
+        let new_bin_weight: f64 = instance.weights.open_operating_theater;
+        let bin_capacity_vec: Vec<u16> = instance.theaters.iter()
+        .map(|theater| theater.availability[day]).collect_vec();
+
+        // each surgeon is named and weighted: vec[i]: ((surgeon_idx, tot_duration), VecDeque<(patient_idx, duration)>)
+        let surgeon_durations_partition_map: BTreeMap<usize, SurgeonPartitionInfo> = self.get_surgeon_durations_partition_map(day);
+
+        // Set up bin_gradient
+        let mut bins: BTreeMap<usize, Bin> = BTreeMap::new();
+        let mut _bin_capacities = instance.theaters.iter().enumerate()
+        .map(|(idx, theater)| (idx, theater.availability[day])).collect_vec();
+        _bin_capacities.sort_by(|a,b| b.1.cmp(&a.1));       
+        _bin_capacities.into_iter().enumerate()
+        .map(|(order, (idx, capacity))| {
+            bins.insert(idx, Bin{theater_idx: idx, capacity, importance_weight: order as f64})
+        }).collect_vec();
+
+        //########LP solve return something
+        lp_various_bin_packing(
+            num_bins, 
+            num_surgeons,
+            surgeon_transfer_weight,
+            new_bin_weight,
+            bin_capacity_vec,
+            bins,
+            surgeon_durations_partition_map
+            );
+
+        //##### if didn't work, return error so that patient will be bumped
+    Ok(())
     }
 }
 
@@ -158,3 +198,26 @@ fn biggest_in_biggest_bin_pack(items: &mut Vec<(usize, u16)>, bins: &mut Vec<(us
     Ok(bin_assignment)
 }
 */
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use itertools::Itertools;
+
+    #[test]
+    fn check_lp_various_bin_packing() {
+        
+        //Set up various_bin_packing instance
+
+        // //Apply function
+        // lp_various_bin_packing(
+        //     num_bins, 
+        //     num_surgeons,
+        //     surgeon_transfer_weight,
+        //     new_bin_weight,
+        //     bin_capacity_vec,
+        //     bins,
+        //     surgeon_durations_partition_map
+        //     );
+    }
+}
