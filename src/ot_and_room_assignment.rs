@@ -13,21 +13,21 @@ To do this, need to chose patient to bump. Recommended patient should have small
 // pub fn assign_ots_and_rooms(instance: &Instance, day_assignment: &mut DayAssignment) {todo!();}
 
 struct Bin {
-    theater_idx: usize,
+    // theater_idx: usize,
     capacity: u16,
     importance_weight: f64
 }
 
 //####################
 fn lp_various_bin_packing(
-    num_bins: usize, 
-    num_surgeons: usize,
     surgeon_transfer_weight: f64,
     new_bin_weight: f64,
-    bin_capacity_vec: Vec<u16>,
     bins: BTreeMap<usize, Bin>,
     surgeon_durations_partition_map: BTreeMap<usize, SurgeonPartitionInfo>
     ) -> Result<(), String> {
+
+        let num_bins: usize = bins.len(); 
+        let num_surgeons: usize = surgeon_durations_partition_map.len();
 
         let bin_gradient_weight = |bin_idx: usize| {bins.get(&bin_idx).unwrap().importance_weight};
     
@@ -107,7 +107,7 @@ fn lp_various_bin_packing(
                     }
                 }
             }
-            summands.push((*y_map.get(&bin_idx).unwrap(), bin_capacity_vec[bin_idx] as f64));
+            summands.push((*y_map.get(&bin_idx).unwrap(), bins.get(&bin_idx).unwrap().capacity as f64));
             problem.add_constraint(summands, ComparisonOp::Ge, 0.0);
         }
 
@@ -119,6 +119,29 @@ fn lp_various_bin_packing(
 
             return Err(format!("Solver didn't work. Gave error: {}", solver_result.err().unwrap()));
         };
+        #[cfg(test)]
+        {
+            // print bin variables
+            // let bin_variables = y_map.iter() ############
+            let bin_var_dist = y_map.iter()
+            .map(|(bin_idx, var)| solution_of_lp[*var]).collect_vec();
+            println!("Bin variables: {:?}", bin_var_dist);
+
+            // print surgeon variables
+            for surgeon_idx in 0..num_surgeons {
+                for i in 0..=i_max {
+                    for j in 0..=i {
+                        let bin_dist = (0..num_bins)
+                        .map(|bin_idx| solution_of_lp[*x_map.get(&(surgeon_idx, bin_idx, i, j)).unwrap()])
+                        .collect_vec();
+                        if bin_dist.iter().sum::<f64>() < 1e-6 {
+                            continue;
+                        }
+                        println!("surgeon: {surgeon_idx}, i: {i}, j: {j} bin dist: {:?}", bin_dist);
+                    }
+                }
+            }
+        }
 
         //##### perform rounding
 
@@ -138,8 +161,8 @@ impl<'a> Assignment<'a> {
         let num_surgeons: usize = instance.surgeons.len();
         let surgeon_transfer_weight: f64 = instance.weights.surgeon_transfer;
         let new_bin_weight: f64 = instance.weights.open_operating_theater;
-        let bin_capacity_vec: Vec<u16> = instance.theaters.iter()
-        .map(|theater| theater.availability[day]).collect_vec();
+        // let bin_capacity_vec: Vec<u16> = instance.theaters.iter()
+        // .map(|theater| theater.availability[day]).collect_vec();
 
         // each surgeon is named and weighted: vec[i]: ((surgeon_idx, tot_duration), VecDeque<(patient_idx, duration)>)
         let surgeon_durations_partition_map: BTreeMap<usize, SurgeonPartitionInfo> = self.get_surgeon_durations_partition_map(day);
@@ -151,16 +174,13 @@ impl<'a> Assignment<'a> {
         _bin_capacities.sort_by(|a,b| b.1.cmp(&a.1));       
         _bin_capacities.into_iter().enumerate()
         .map(|(order, (idx, capacity))| {
-            bins.insert(idx, Bin{theater_idx: idx, capacity, importance_weight: order as f64})
+            bins.insert(idx, Bin{capacity, importance_weight: order as f64})
         }).collect_vec();
 
         //########LP solve return something
         lp_various_bin_packing(
-            num_bins, 
-            num_surgeons,
             surgeon_transfer_weight,
             new_bin_weight,
-            bin_capacity_vec,
             bins,
             surgeon_durations_partition_map
             );
@@ -209,15 +229,44 @@ mod tests {
         
         //Set up various_bin_packing instance
 
-        // //Apply function
-        // lp_various_bin_packing(
-        //     num_bins, 
-        //     num_surgeons,
-        //     surgeon_transfer_weight,
-        //     new_bin_weight,
-        //     bin_capacity_vec,
-        //     bins,
-        //     surgeon_durations_partition_map
-        //     );
+        
+        let surgeon_transfer_weight = 10.0;
+        let new_bin_weight = 10.0;
+        let mut bins: BTreeMap<usize, Bin> = BTreeMap::new();
+        [400, 400, 200, 200].into_iter().enumerate()
+        .map(|(i, cap)| bins.insert(i, Bin {capacity: cap, importance_weight: i as f64 }))
+        .collect_vec();
+        let mut surgeon_durations_partition_map: BTreeMap<usize, SurgeonPartitionInfo> = BTreeMap::new();
+        [SurgeonPartitionInfo {
+            total_duration: 300,
+            partition_location: 1,
+            partitioned_durations: (200, 100),
+        },
+        SurgeonPartitionInfo {
+            total_duration: 100,
+            partition_location: 2,
+            partitioned_durations: (50, 50),
+        },
+        SurgeonPartitionInfo {
+            total_duration: 200,
+            partition_location: 1,
+            partitioned_durations: (100, 100),
+        },
+        SurgeonPartitionInfo {
+            total_duration: 200,
+            partition_location: 1,
+            partitioned_durations: (50, 150),
+        },
+        ].into_iter().enumerate()
+        .map(|(x, part)| surgeon_durations_partition_map.insert(x, part))
+        .collect_vec();
+
+        //Apply function
+        lp_various_bin_packing(
+            surgeon_transfer_weight,
+            new_bin_weight,
+            bins,
+            surgeon_durations_partition_map
+            );
     }
 }
